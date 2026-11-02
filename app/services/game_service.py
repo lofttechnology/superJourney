@@ -1,143 +1,110 @@
-from datetime import datetime, timezone
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.domain.journey import JourneyState, MAX_TIME_PER_STAGE, RIDDLES, TOTAL_LEVELS
+from app.domain.journey import Riddle
 
 
 class GameService:
-    def __init__(self, repository):
+    def __init__(self, repository, levels: list[Riddle]):
         self.repository = repository
+        self.levels = levels
 
-    def get_level_number(self, state: JourneyState) -> int:
-        if state == JourneyState.POINT_1:
-            return 1
-        if state == JourneyState.POINT_2:
-            return 2
-        if state == JourneyState.POINT_3:
-            return 3
-        return TOTAL_LEVELS
+    @property
+    def total_levels(self) -> int:
+        return len(self.levels)
 
     def get_start_message(self) -> str:
         return (
-            "🌍 Добро пожаловать в superJourney!\n\n"
-            "Ты отправляешься в увлекательное путешествие по трем таинственным точкам.\n"
-            "Каждая точка скрывает свою загадку, а правильный ответ открывает следующий этап.\n\n"
-            "🧭 Цель: пройти все три уровня и добраться до финальной точки."
+            "🌍 *Добро пожаловать в superJourney!*\n\n"
+            "Тебя ждут загадки, уровни и путешествие по неизведанным местам.\n"
+            "⏱ На каждом уровне есть ограничение по времени.\n\n"
+            "Нажми «Начать», чтобы открыть карту и отправиться в путь!"
         )
 
-    def get_status_line(self, state: JourneyState, user_id: int) -> str:
-        level = self.get_level_number(state)
-        remaining = self.repository.get_remaining_seconds(user_id, MAX_TIME_PER_STAGE)
-        title = RIDDLES.get(state).title if state in RIDDLES else "Финальная точка"
+    def get_level(self, level: int) -> Riddle:
+        return self.levels[level - 1]
+
+    def get_stage_intro(self, level: int, user_id: int) -> str:
+        riddle = self.get_level(level)
+        remaining = self.repository.get_remaining_seconds(user_id, riddle.time_limit_seconds)
         return (
-            f"🎮 Уровень: {level}/{TOTAL_LEVELS} | "
-            f"📍 {title} | "
-            f"⏱ Таймер: {remaining}s"
+            f"🎮 *Уровень {level}/{self.total_levels}*\n"
+            f"📍 {riddle.title} — {riddle.map_label}\n"
+            f"⏱ Осталось: *{remaining} сек.*\n\n"
+            f"{riddle.question}\n\n"
+            "Выбери вариант кнопкой ниже или отправь ответ сообщением."
         )
 
-    def get_question_for_state(self, state: JourneyState) -> str:
-        riddle = RIDDLES.get(state)
-        if riddle is None:
-            return "🏁 Путешествие завершено! Вы уже прошли все уровни.\n\n🗺️ Карта путешествия:\n🌿 Лесная тропа → 🏔️ Горный перевал → 🏆 Финальная башня"
-        return riddle.question
+    def build_inline_keyboard(self, level: int, page: str = "stage") -> InlineKeyboardMarkup:
+        if page == "welcome":
+            return InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Начать путешествие", callback_data="restart")]])
+        if page == "finished":
+            return InlineKeyboardMarkup([
+                [InlineKeyboardButton("🗺️ Финальная карта", callback_data="map")],
+                [InlineKeyboardButton("🔁 Новое путешествие", callback_data="restart")],
+                [InlineKeyboardButton("📊 Моя статистика", callback_data="stats")],
+            ])
+        if page == "map":
+            return InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ К загадке", callback_data="back")],
+                [InlineKeyboardButton("🔁 Начать заново", callback_data="restart")],
+            ])
 
-    def get_state_title(self, state: JourneyState) -> str:
-        riddle = RIDDLES.get(state)
-        if riddle is None:
-            return "Финальная точка"
-        return riddle.title
+        riddle = self.get_level(level)
+        rows = [
+            [InlineKeyboardButton(f"{option}", callback_data=f"answer:{level}:{index}")]
+            for index, option in enumerate(riddle.options)
+        ]
+        rows.extend([
+            [InlineKeyboardButton("🔁 Обновить таймер", callback_data="retry"), InlineKeyboardButton("🗺️ Карта", callback_data="map")],
+            [InlineKeyboardButton("📊 Статистика", callback_data="stats"), InlineKeyboardButton("🏳️ Начать заново", callback_data="restart")],
+        ])
+        return InlineKeyboardMarkup(rows)
 
-    def get_map_text(self) -> str:
-        return (
-            "🗺️ Карта путешествия\n\n"
-            "🌿 Лесная тропа → 🏔️ Горный перевал → 🏆 Финальная башня\n\n"
-            "✅ Пройдено: 0/3\n"
-            "🎯 Следующая цель: открыть финальную точку."
-        )
+    def map_text(self, current_level: int, completed: bool = False) -> str:
+        path = []
+        passed = self.total_levels if completed else max(0, current_level - 1)
+        for index, level in enumerate(self.levels, start=1):
+            marker = "✅" if index <= passed else ("📍" if index == current_level and not completed else "🔒")
+            path.append(f"{marker} {level.map_label}")
+        route = "\n⬇️\n".join(path)
+        if completed:
+            route += "\n\n🏆 *ФИНИШ — ПУТЕШЕСТВИЕ ЗАВЕРШЕНО!*"
+        else:
+            route += f"\n\n🎯 Текущая цель: уровень {current_level}/{self.total_levels}"
+        return f"🗺️ *Карта superJourney*\n\n{route}"
 
-    def build_inline_keyboard(self, state: JourneyState):
-        if state == JourneyState.FINISHED:
-            return InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton("🔁 Начать заново", callback_data="restart")],
-                    [InlineKeyboardButton("🗺️ Показать карту", callback_data="map")],
-                ]
-            )
-
-        riddle = RIDDLES[state]
-        return InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton(f"✅ Ответ: {riddle.answer}", callback_data=f"answer:{riddle.answer}")],
-                [
-                    InlineKeyboardButton("🔁 Попробовать снова", callback_data="retry"),
-                    InlineKeyboardButton("🗺️ Карта", callback_data="map"),
-                ],
-                [InlineKeyboardButton("🚀 Сбросить игру", callback_data="restart")],
-            ]
-        )
-
-    def resolve_answer(self, state: JourneyState, raw_answer: str):
-        riddle = RIDDLES.get(state)
-        if riddle is None:
+    def resolve_answer(self, level: int, raw_answer: str) -> dict:
+        riddle = self.get_level(level)
+        if str(raw_answer).strip().casefold() == riddle.answer.strip().casefold():
+            next_level = level + 1
             return {
-                "is_correct": False,
-                "message": "🏁 Путешествие завершено.",
-                "next_state": JourneyState.FINISHED,
+                "is_correct": True,
+                "message": riddle.success_message,
+                "next_level": next_level,
+                "finished": next_level > self.total_levels,
             }
-
-        normalized = (raw_answer or "").strip()
-        if not normalized:
-            return {
-                "is_correct": False,
-                "message": "⚠️ Пожалуйста, пришлите число.",
-                "next_state": state,
-            }
-
-        try:
-            answer = int(normalized)
-        except ValueError:
-            return {
-                "is_correct": False,
-                "message": "⚠️ Ответ должен быть числом. Попробуйте ещё раз.",
-                "next_state": state,
-            }
-
-        if answer == riddle.answer:
-            if state == JourneyState.POINT_1:
-                return {
-                    "is_correct": True,
-                    "message": riddle.success_message,
-                    "next_state": JourneyState.POINT_2,
-                }
-            if state == JourneyState.POINT_2:
-                return {
-                    "is_correct": True,
-                    "message": riddle.success_message,
-                    "next_state": JourneyState.POINT_3,
-                }
-            if state == JourneyState.POINT_3:
-                return {
-                    "is_correct": True,
-                    "message": riddle.success_message,
-                    "next_state": JourneyState.FINISHED,
-                }
-
         return {
             "is_correct": False,
-            "message": "❌ Неверный ответ. Попробуйте ещё раз.",
-            "next_state": state,
+            "message": "❌ Не совсем! Попробуй ещё раз — время ещё идёт.",
+            "next_level": level,
+            "finished": False,
         }
 
-    def build_final_victory(self) -> str:
+    def final_card(self, elapsed_seconds: int) -> str:
+        minutes, seconds = divmod(elapsed_seconds, 60)
+        route = " → ".join(level.map_label for level in self.levels)
         return (
-            "🎉 Поздравляем!\n\n"
-            "Вы прошли все три уровня и успешно завершили путешествие.\n\n"
-            "🏆 Итог: путь пройден, таймер побеждён, карта открыта.\n"
-            "Вы настоящий путешественник!"
+            "🏆 *ФИНАЛЬНАЯ КАРТА ПУТЕШЕСТВИЯ*\n\n"
+            "🎉 Все уровни пройдены! Ты настоящий мастер загадок.\n\n"
+            f"🗺️ Маршрут:\n{route}\n\n"
+            f"⏱ Время прохождения: {minutes:02d}:{seconds:02d}\n"
+            f"⭐ Уровней пройдено: {self.total_levels}/{self.total_levels}\n\n"
+            "Сохрани этот маршрут в памяти и отправляйся в новое приключение!"
         )
 
-    def get_stage_intro(self, state: JourneyState, user_id: int) -> str:
-        status = self.get_status_line(state, user_id)
-        question = self.get_question_for_state(state)
-        return f"{status}\n\n{question}"
+    @staticmethod
+    def format_duration(seconds: int | None) -> str:
+        if seconds is None:
+            return "—"
+        minutes, remainder = divmod(seconds, 60)
+        return f"{minutes}м {remainder}с"

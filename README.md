@@ -1,41 +1,45 @@
 # superJourney
 
-Telegram-бот путешествия по точкам с inline-кнопками, хранением прогресса в SQLite и игровым интерфейсом.
+Telegram adventure bot with inline keyboards, persistent SQLite progress, real-time countdown, player statistics, leaderboard and YAML-configurable levels.
 
-## Что добавлено
+## Features
 
-- inline-кнопки Telegram вместо обычной клавиатуры;
-- сохранение состояния пользователя в SQLite;
-- таймер для каждого уровня;
-- уровень/статус путешествия в сообщениях;
-- финальная карта путешествия;
-- возможность начать заново и вернуться к карте.
+- Live level countdown (updates every second using Telegram job queue).
+- SQLite stores current level, timer start, attempts, timeouts and lifetime player statistics.
+- `/stats` shows a player's lifetime results.
+- `/leaderboard` displays the fastest completed journeys.
+- Edit levels, options, answers and per-level time limits in `config/levels.yaml`.
+- Existing progress database is migrated automatically with additive columns.
 
-## Сценарий
-
-1. `/start` запускает путешествие.
-2. Уровень 1: ответ `5`.
-3. Уровень 2: ответ `21`.
-4. Уровень 3: ответ `7`.
-5. Неверный ответ — повторная попытка.
-6. После победы — финальная карта и поздравление.
-
-## Архитектура
-
-- `app/domain` — доменные сущности и правила.
-- `app/infrastructure` — SQLite и доступ к данным.
-- `app/services` — логика игры и UI-формы.
-- `app/handlers` — обработчики Telegram.
-- `app/config.py` — конфигурация.
-- `app/main.py` — запуск.
-
-## Запуск
+## Setup
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# вставьте токен Telegram-бота в .env
+# set TELEGRAM_TOKEN in .env
 python -m app.main
 ```
+
+Optional `.env` settings: `DB_PATH` and `LEVELS_PATH`.
+
+## Configure levels
+
+Edit `config/levels.yaml`. Each level requires `title`, `question`, and `answer`. `options` controls the inline answer buttons; if the correct answer is missing, it is added automatically. Each stage can have its own `time_limit_seconds`, `map_label`, and `success_message`.
+
+Example:
+
+```yaml
+levels:
+  - id: forest
+    title: "Точка 1"
+    map_label: "🌿 Лесная тропа"
+    question: "Сколько будет 2 + 3?"
+    answer: "5"
+    options: ["3", "5", "8"]
+    time_limit_seconds: 30
+    success_message: "Верно!"
+```
+
+Commands: `/start`, `/stats`, `/leaderboard`.

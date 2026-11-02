@@ -1,0 +1,28 @@
+welcome:
+  title: "Путешествие"
+  timer_tick_seconds: 1
+levels:
+  - id: forest
+    title: "Точка 1"
+    map_label: "🌿 Лесная тропа"
+    question: "🧩 Загадка 1\nСколько будет: 2 + 3?"
+    answer: "5"
+    options: ["3", "5", "8"]
+    time_limit_seconds: 30
+    success_message: "✅ Верно! Это число 5. Вы открыли первую точку путешествия. Переходим к точке 2!"
+  - id: mountain
+    title: "Точка 2"
+    map_label: "🏔️ Горный перевал"
+    question: "🧩 Загадка 2\nСколько будет: 3 × 7?"
+    answer: "21"
+    options: ["18", "21", "24"]
+    time_limit_seconds: 30
+    success_message: "✅ Отлично! Ответ 21 — верный. Вы справились со второй точкой. Переходим к точке 3."
+  - id: tower
+    title: "Точка 3"
+    map_label: "🏆 Финальная башня"
+    question: "🧩 Загадка 3\nСколько будет: 14 ÷ 2?"
+    answer: "7"
+    options: ["5", "7", "9"]
+    time_limit_seconds: 30
+    success_message: "✅ Поздравляем! Ответ 7 — правильный. Вы завершили путешествие и прошли финальную точку!"
