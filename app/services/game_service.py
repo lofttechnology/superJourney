@@ -1,4 +1,4 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from app.domain.journey import Riddle
 
@@ -12,66 +12,72 @@ class GameService:
     def total_levels(self) -> int:
         return len(self.levels)
 
+    def get_level(self, level: int) -> Riddle:
+        if level < 1 or level > self.total_levels:
+            raise ValueError(f"Level {level} is outside the configured range.")
+        return self.levels[level - 1]
+
     def get_start_message(self) -> str:
         return (
-            "🌍 *Добро пожаловать в superJourney!*\n\n"
+            "🌍 Добро пожаловать в superJourney!\n\n"
             "Тебя ждут загадки, уровни и путешествие по неизведанным местам.\n"
-            "⏱ На каждом уровне есть ограничение по времени.\n\n"
-            "Нажми «Начать», чтобы открыть карту и отправиться в путь!"
+            "На каждом уровне есть ограничение по времени.\n\n"
+            "Нажми кнопку, чтобы открыть карту и отправиться в путь!"
         )
-
-    def get_level(self, level: int) -> Riddle:
-        return self.levels[level - 1]
 
     def get_stage_intro(self, level: int, user_id: int) -> str:
         riddle = self.get_level(level)
         remaining = self.repository.get_remaining_seconds(user_id, riddle.time_limit_seconds)
         return (
-            f"🎮 *Уровень {level}/{self.total_levels}*\n"
+            f"🎮 Уровень {level}/{self.total_levels}\n"
             f"📍 {riddle.title} — {riddle.map_label}\n"
-            f"⏱ Осталось: *{remaining} сек.*\n\n"
+            f"⏱ Осталось: {remaining} сек.\n\n"
             f"{riddle.question}\n\n"
             "Выбери вариант кнопкой ниже или отправь ответ сообщением."
         )
 
     def build_inline_keyboard(self, level: int, page: str = "stage") -> InlineKeyboardMarkup:
         if page == "welcome":
-            return InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Начать путешествие", callback_data="restart")]])
+            return InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="🚀 Начать путешествие", callback_data="begin")
+            ]])
         if page == "finished":
-            return InlineKeyboardMarkup([
-                [InlineKeyboardButton("🗺️ Финальная карта", callback_data="map")],
-                [InlineKeyboardButton("🔁 Новое путешествие", callback_data="restart")],
-                [InlineKeyboardButton("📊 Моя статистика", callback_data="stats")],
+            return InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🗺️ Финальная карта", callback_data="map")],
+                [InlineKeyboardButton(text="🔁 Новое путешествие", callback_data="restart")],
+                [InlineKeyboardButton(text="📊 Моя статистика", callback_data="stats")],
             ])
         if page == "map":
-            return InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ К загадке", callback_data="back")],
-                [InlineKeyboardButton("🔁 Начать заново", callback_data="restart")],
+            return InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ К загадке", callback_data="back")],
+                [InlineKeyboardButton(text="🔁 Начать заново", callback_data="restart")],
             ])
 
         riddle = self.get_level(level)
         rows = [
-            [InlineKeyboardButton(f"{option}", callback_data=f"answer:{level}:{index}")]
+            [InlineKeyboardButton(text=option, callback_data=f"answer:{level}:{index}")]
             for index, option in enumerate(riddle.options)
         ]
         rows.extend([
-            [InlineKeyboardButton("🔁 Обновить таймер", callback_data="retry"), InlineKeyboardButton("🗺️ Карта", callback_data="map")],
-            [InlineKeyboardButton("📊 Статистика", callback_data="stats"), InlineKeyboardButton("🏳️ Начать заново", callback_data="restart")],
+            [
+                InlineKeyboardButton(text="🔄 Обновить карточку", callback_data="retry"),
+                InlineKeyboardButton(text="🗺️ Карта", callback_data="map"),
+            ],
+            [
+                InlineKeyboardButton(text="📊 Статистика", callback_data="stats"),
+                InlineKeyboardButton(text="🏳️ Начать заново", callback_data="restart"),
+            ],
         ])
-        return InlineKeyboardMarkup(rows)
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def map_text(self, current_level: int, completed: bool = False) -> str:
-        path = []
         passed = self.total_levels if completed else max(0, current_level - 1)
+        route = []
         for index, level in enumerate(self.levels, start=1):
             marker = "✅" if index <= passed else ("📍" if index == current_level and not completed else "🔒")
-            path.append(f"{marker} {level.map_label}")
-        route = "\n⬇️\n".join(path)
-        if completed:
-            route += "\n\n🏆 *ФИНИШ — ПУТЕШЕСТВИЕ ЗАВЕРШЕНО!*"
-        else:
-            route += f"\n\n🎯 Текущая цель: уровень {current_level}/{self.total_levels}"
-        return f"🗺️ *Карта superJourney*\n\n{route}"
+            route.append(f"{marker} {level.map_label}")
+        text = "🗺️ Карта superJourney\n\n" + "\n⬇️\n".join(route)
+        return text + ("\n\n🏆 ФИНИШ — ПУТЕШЕСТВИЕ ЗАВЕРШЕНО!" if completed else f"\n\n🎯 Текущая цель: уровень {current_level}/{self.total_levels}")
 
     def resolve_answer(self, level: int, raw_answer: str) -> dict:
         riddle = self.get_level(level)
@@ -94,7 +100,7 @@ class GameService:
         minutes, seconds = divmod(elapsed_seconds, 60)
         route = " → ".join(level.map_label for level in self.levels)
         return (
-            "🏆 *ФИНАЛЬНАЯ КАРТА ПУТЕШЕСТВИЯ*\n\n"
+            "🏆 ФИНАЛЬНАЯ КАРТА ПУТЕШЕСТВИЯ\n\n"
             "🎉 Все уровни пройдены! Ты настоящий мастер загадок.\n\n"
             f"🗺️ Маршрут:\n{route}\n\n"
             f"⏱ Время прохождения: {minutes:02d}:{seconds:02d}\n"

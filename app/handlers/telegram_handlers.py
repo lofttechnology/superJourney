@@ -1,27 +1,35 @@
-from telegram import Update
-from telegram.error import BadRequest
-from telegram.ext import (
-    ApplicationBuilder,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+import asyncio
+import logging
+
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import Command
+from aiogram.types import CallbackQuery, Message
 
 from app.domain.journey import Riddle
 from app.infrastructure.database import UserProgressRepository
 from app.services.game_service import GameService
 
-TIMER_JOB_PREFIX = "journey-timer:"
+logger = logging.getLogger(__name__)
 
 
 class JourneyBot:
     def __init__(self, repository: UserProgressRepository, levels: list[Riddle]):
         self.repository = repository
         self.game_service = GameService(repository, levels)
+        self.router = Router(name="journey")
+        self._timer_tasks: dict[int, asyncio.Task] = {}
+        self._register_handlers()
 
-    def _identity(self, user) -> tuple[str | None, str]:
+    def _register_handlers(self) -> None:
+        self.router.message.register(self.start, Command("start"))
+        self.router.message.register(self.stats, Command("stats"))
+        self.router.message.register(self.leaderboard, Command("leaderboard"))
+        self.router.callback_query.register(self.handle_callback)
+        self.router.message.register(self.handle_text, F.text)
+
+    @staticmethod
+    def _identity(user) -> tuple[str | None, str]:
         display = " ".join(part for part in [user.first_name, user.last_name] if part).strip()
         return user.username, display or f"Игрок {user.id}"
 
@@ -29,145 +37,139 @@ class JourneyBot:
         username, display = self._identity(user)
         return self.repository.ensure_player(user.id, username, display)
 
-    def _cancel_timer(self, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
-        for job in context.job_queue.get_jobs_by_name(f"{TIMER_JOB_PREFIX}{user_id}"):
-            job.schedule_removal()
+    def _cancel_timer(self, user_id: int) -> None:
+        task = self._timer_tasks.pop(user_id, None)
+        if task and not task.done():
+            task.cancel()
 
-    def _schedule_timer(self, context: ContextTypes.DEFAULT_TYPE, user_id: int, chat_id: int, message_id: int) -> None:
-        self._cancel_timer(context, user_id)
-        context.job_queue.run_repeating(
-            self._timer_tick,
-            interval=1,
-            first=1,
-            name=f"{TIMER_JOB_PREFIX}{user_id}",
-            data={"user_id": user_id, "chat_id": chat_id, "message_id": message_id},
+    def _start_timer(self, bot: Bot, user_id: int, chat_id: int, message_id: int) -> None:
+        self._cancel_timer(user_id)
+        self._timer_tasks[user_id] = asyncio.create_task(
+            self._timer_loop(bot, user_id, chat_id, message_id),
+            name=f"journey-timer:{user_id}",
         )
 
-    async def _send_level(self, update: Update, context: ContextTypes.DEFAULT_TYPE, level: int) -> None:
-        user = update.effective_user
-        intro = self.game_service.get_stage_intro(level, user.id)
-        keyboard = self.game_service.build_inline_keyboard(level)
-        message = await update.effective_message.reply_text(intro, reply_markup=keyboard, parse_mode="Markdown")
-        self._schedule_timer(context, user.id, message.chat_id, message.message_id)
+    async def _send_level(self, message: Message, bot: Bot, level: int) -> None:
+        user_id = message.from_user.id
+        card = await message.answer(
+            self.game_service.get_stage_intro(level, user_id),
+            reply_markup=self.game_service.build_inline_keyboard(level),
+        )
+        self._start_timer(bot, user_id, card.chat.id, card.message_id)
 
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user = update.effective_user
+    async def start(self, message: Message) -> None:
+        user = message.from_user
         username, display = self._identity(user)
-        self._cancel_timer(context, user.id)
+        self._cancel_timer(user.id)
         self.repository.start_game(user.id, username, display)
-        keyboard = self.game_service.build_inline_keyboard(1, "welcome")
-        await update.effective_message.reply_text(
-            self.game_service.get_start_message(), reply_markup=keyboard, parse_mode="Markdown"
+        await message.answer(
+            self.game_service.get_start_message(),
+            reply_markup=self.game_service.build_inline_keyboard(1, "welcome"),
         )
 
-    async def stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user = update.effective_user
+    async def stats(self, message: Message) -> None:
+        user = message.from_user
         self._progress(user)
         row = self.repository.get_player_stats(user.id)
         progress = self.repository.get_progress(user.id)
-        completed = row["games_completed"]
         active_level = progress["level"] if progress and not progress["completed"] else 0
         text = (
-            f"📊 *Статистика игрока {self._identity(user)[1]}*\n\n"
+            f"📊 Статистика игрока {self._identity(user)[1]}\n\n"
             f"🚀 Запусков: {row['games_started']}\n"
-            f"🏆 Завершённых путешествий: {completed}\n"
+            f"🏆 Завершённых путешествий: {row['games_completed']}\n"
             f"⭐ Лучшее время: {self.game_service.format_duration(row['best_time_seconds'])}\n"
             f"🧩 Всего ответов: {row['total_attempts']}\n"
             f"⌛ Истекло таймеров: {row['timeouts']}\n"
             f"🎮 Текущий уровень: {active_level or 'нет активной игры'}"
         )
-        await update.effective_message.reply_text(text, parse_mode="Markdown")
+        await message.answer(text)
 
-    async def leaderboard(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def leaderboard(self, message: Message) -> None:
         rows = self.repository.get_leaderboard()
         if not rows:
-            text = "🏅 *Таблица лидеров*\n\nПока нет завершённых путешествий — стань первым!"
-        else:
-            lines = ["🏅 *Таблица лидеров — лучшее время*", ""]
-            for index, row in enumerate(rows, start=1):
-                name = row["display_name"] or (f"@{row['username']}" if row["username"] else "Путешественник")
-                duration = self.game_service.format_duration(row["best_time_seconds"])
-                lines.append(f"{index}. {name} — {duration} · 🏆 {row['games_completed']}")
-            text = "\n".join(lines)
-        await update.effective_message.reply_text(text, parse_mode="Markdown")
+            await message.answer("🏅 Таблица лидеров\n\nПока нет завершённых путешествий — стань первым!")
+            return
+        lines = ["🏅 Таблица лидеров — лучшее время", ""]
+        for index, row in enumerate(rows, start=1):
+            name = row["display_name"] or (f"@{row['username']}" if row["username"] else "Путешественник")
+            lines.append(f"{index}. {name} — {self.game_service.format_duration(row['best_time_seconds'])} · 🏆 {row['games_completed']}")
+        await message.answer("\n".join(lines))
 
-    async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        user = update.effective_user
+    async def handle_text(self, message: Message, bot: Bot) -> None:
+        user = message.from_user
         progress = self._progress(user)
         if progress["completed"]:
-            await update.effective_message.reply_text(
-                "🏁 Путешествие уже завершено. Используй /start для нового раунда или /stats для статистики."
-            )
+            await message.answer("🏁 Путешествие уже завершено. Используй /start для нового раунда или /stats для статистики.")
             return
         level = int(progress["level"])
         if not 1 <= level <= self.game_service.total_levels:
             level = 1
             self.repository.move_to_level(user.id, level)
-        result = self.game_service.resolve_answer(level, update.effective_message.text or "")
-        if self.repository.get_remaining_seconds(user.id, self.game_service.get_level(level).time_limit_seconds) <= 0:
-            await self._handle_timeout(update, context, user.id, level)
+        riddle = self.game_service.get_level(level)
+        if self.repository.get_remaining_seconds(user.id, riddle.time_limit_seconds) <= 0:
+            await self._handle_timeout(message, bot, user.id, level)
             return
+        result = self.game_service.resolve_answer(level, message.text or "")
         self.repository.record_attempt(user.id, result["is_correct"])
-        await self._apply_result(update, context, user.id, level, result)
+        await self._apply_result(message, bot, user.id, level, result)
 
-    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        query = update.callback_query
+    async def handle_callback(self, query: CallbackQuery, bot: Bot) -> None:
         await query.answer()
         user = query.from_user
         data = query.data or ""
 
         if data == "restart":
             username, display = self._identity(user)
-            self._cancel_timer(context, user.id)
+            self._cancel_timer(user.id)
             self.repository.start_game(user.id, username, display)
-            await query.edit_message_text(self.game_service.get_start_message(), parse_mode="Markdown")
-            await query.message.reply_text(
-                "🧭 Готов? Нажми «Начать путешествие» в сообщении выше, чтобы открыть первый уровень."
-            )
+            if query.message:
+                await query.message.edit_text(
+                    self.game_service.get_start_message(),
+                    reply_markup=self.game_service.build_inline_keyboard(1, "welcome"),
+                )
             return
 
         progress = self._progress(user)
         level = int(progress["level"])
         if data == "begin":
-            await self._send_level(update, context, level)
+            if query.message:
+                await self._send_level(query.message, bot, level)
             return
         if data == "stats":
-            stats = self.repository.get_player_stats(user.id)
-            await query.message.reply_text(
-                f"📊 Завершено: {stats['games_completed']} · Лучшее время: "
-                f"{self.game_service.format_duration(stats['best_time_seconds'])} · "
-                f"Попыток: {stats['total_attempts']}"
+            row = self.repository.get_player_stats(user.id)
+            await query.message.answer(
+                f"📊 Завершено: {row['games_completed']} · Лучшее время: "
+                f"{self.game_service.format_duration(row['best_time_seconds'])} · Попыток: {row['total_attempts']}"
             )
             return
         if data == "leaderboard":
-            await self.leaderboard(update, context)
+            if query.message:
+                await self.leaderboard(query.message)
             return
         if data == "map":
-            await query.edit_message_text(
-                self.game_service.map_text(level, bool(progress["completed"])),
-                reply_markup=self.game_service.build_inline_keyboard(level, "map"),
-                parse_mode="Markdown",
-            )
+            if query.message:
+                await query.message.edit_text(
+                    self.game_service.map_text(level, bool(progress["completed"])),
+                    reply_markup=self.game_service.build_inline_keyboard(level, "map"),
+                )
             return
         if data == "back":
-            if progress["completed"]:
-                await query.edit_message_text(self.game_service.final_card(0), parse_mode="Markdown")
-                return
-            await query.edit_message_text(
-                self.game_service.get_stage_intro(level, user.id),
-                reply_markup=self.game_service.build_inline_keyboard(level),
-                parse_mode="Markdown",
-            )
-            self._schedule_timer(context, user.id, query.message.chat_id, query.message.message_id)
-            return
-        if data == "retry":
-            if not progress["completed"]:
-                await query.edit_message_text(
+            if query.message and not progress["completed"]:
+                await query.message.edit_text(
                     self.game_service.get_stage_intro(level, user.id),
                     reply_markup=self.game_service.build_inline_keyboard(level),
-                    parse_mode="Markdown",
                 )
-                self._schedule_timer(context, user.id, query.message.chat_id, query.message.message_id)
+                self._start_timer(bot, user.id, query.message.chat.id, query.message.message_id)
+            elif query.message:
+                await query.message.edit_text(self.game_service.final_card(0))
+            return
+        if data == "retry":
+            if query.message and not progress["completed"]:
+                await query.message.edit_text(
+                    self.game_service.get_stage_intro(level, user.id),
+                    reply_markup=self.game_service.build_inline_keyboard(level),
+                )
+                self._start_timer(bot, user.id, query.message.chat.id, query.message.message_id)
             return
         if data.startswith("answer:"):
             try:
@@ -180,132 +182,112 @@ class JourneyBot:
             except (ValueError, IndexError):
                 await query.answer("Не удалось распознать вариант ответа. Откройте уровень снова.", show_alert=True)
                 return
-            result = self.game_service.resolve_answer(level, option)
-            if self.repository.get_remaining_seconds(user.id, self.game_service.get_level(level).time_limit_seconds) <= 0:
-                await self._handle_timeout_callback(update, context, user.id, level)
+            riddle = self.game_service.get_level(level)
+            if self.repository.get_remaining_seconds(user.id, riddle.time_limit_seconds) <= 0:
+                await self._handle_timeout_callback(query, bot, user.id, level)
                 return
+            result = self.game_service.resolve_answer(level, option)
             self.repository.record_attempt(user.id, result["is_correct"])
-            await self._apply_callback_result(update, context, user.id, level, result)
+            await self._apply_callback_result(query, bot, user.id, level, result)
 
-    async def _apply_result(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, level: int, result: dict) -> None:
+    async def _apply_result(self, message: Message, bot: Bot, user_id: int, level: int, result: dict) -> None:
         if not result["is_correct"]:
-            await update.effective_message.reply_text(result["message"])
+            await message.answer(result["message"])
             return
-        self._cancel_timer(context, user_id)
+        self._cancel_timer(user_id)
         if result["finished"]:
             elapsed = self.repository.mark_completed(user_id)
-            await update.effective_message.reply_text(
+            await message.answer(
                 self.game_service.final_card(elapsed),
                 reply_markup=self.game_service.build_inline_keyboard(level, "finished"),
-                parse_mode="Markdown",
             )
             return
         next_level = result["next_level"]
         self.repository.move_to_level(user_id, next_level)
-        await update.effective_message.reply_text(result["message"])
-        await self._send_level(update, context, next_level)
+        await message.answer(result["message"])
+        await self._send_level(message, bot, next_level)
 
-    async def _apply_callback_result(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, level: int, result: dict) -> None:
-        query = update.callback_query
-        self._cancel_timer(context, user_id)
+    async def _apply_callback_result(self, query: CallbackQuery, bot: Bot, user_id: int, level: int, result: dict) -> None:
+        message = query.message
+        if not message:
+            return
         if not result["is_correct"]:
-            await query.edit_message_text(
-                result["message"] + "\n\n" + self.game_service.get_stage_intro(level, user_id),
+            await query.answer(result["message"], show_alert=True)
+            return
+        self._cancel_timer(user_id)
+        if result["finished"]:
+            elapsed = self.repository.mark_completed(user_id)
+            await message.edit_text(result["message"])
+            await message.answer(
+                self.game_service.final_card(elapsed),
+                reply_markup=self.game_service.build_inline_keyboard(level, "finished"),
+            )
+            return
+        next_level = result["next_level"]
+        self.repository.move_to_level(user_id, next_level)
+        await message.edit_text(result["message"])
+        await self._send_level(message, bot, next_level)
+
+    async def _handle_timeout(self, message: Message, bot: Bot, user_id: int, level: int) -> None:
+        self.repository.record_timeout(user_id)
+        await message.answer("⌛ Время вышло! Уровень не потерян — отсчёт начался заново.")
+        await self._send_level(message, bot, level)
+
+    async def _handle_timeout_callback(self, query: CallbackQuery, bot: Bot, user_id: int, level: int) -> None:
+        self._cancel_timer(user_id)
+        self.repository.record_timeout(user_id)
+        if query.message:
+            await query.message.edit_text(
+                "⌛ Время вышло! Уровень не потерян — отсчёт начался заново.\n\n"
+                + self.game_service.get_stage_intro(level, user_id),
                 reply_markup=self.game_service.build_inline_keyboard(level),
-                parse_mode="Markdown",
             )
-            self._schedule_timer(context, user_id, query.message.chat_id, query.message.message_id)
-            return
-        if result["finished"]:
-            elapsed = self.repository.mark_completed(user_id)
-            await query.edit_message_text(result["message"])
-            await query.message.reply_text(
-                self.game_service.final_card(elapsed),
-                reply_markup=self.game_service.build_inline_keyboard(level, "finished"),
-                parse_mode="Markdown",
-            )
-            return
-        next_level = result["next_level"]
-        self.repository.move_to_level(user_id, next_level)
-        await query.edit_message_text(result["message"])
-        await query.message.reply_text(
-            self.game_service.get_stage_intro(next_level, user_id),
-            reply_markup=self.game_service.build_inline_keyboard(next_level),
-            parse_mode="Markdown",
-        )
-        message = await query.message.reply_text(
-            "⏱ Таймер уровня запущен. Используй кнопки в карточке уровня выше.",
-            disable_notification=True,
-        )
-        self._schedule_timer(context, user_id, message.chat_id, message.message_id)
+            self._start_timer(bot, user_id, query.message.chat.id, query.message.message_id)
 
-    async def _handle_timeout(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, level: int) -> None:
-        self.repository.record_timeout(user_id)
-        await update.effective_message.reply_text("⌛ Время вышло! Уровень не потерян — таймер запущен заново.")
-        await self._send_level(update, context, level)
-
-    async def _handle_timeout_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, level: int) -> None:
-        query = update.callback_query
-        self._cancel_timer(context, user_id)
-        self.repository.record_timeout(user_id)
-        await query.edit_message_text("⌛ Время вышло! Уровень не потерян — таймер запущен заново.")
-        await query.message.reply_text(
-            self.game_service.get_stage_intro(level, user_id),
-            reply_markup=self.game_service.build_inline_keyboard(level),
-            parse_mode="Markdown",
-        )
-        message = await query.message.reply_text("⏱ Таймер уровня запущен.", disable_notification=True)
-        self._schedule_timer(context, user_id, message.chat_id, message.message_id)
-
-    async def _timer_tick(self, context: ContextTypes.DEFAULT_TYPE) -> None:
-        job = context.job
-        user_id = job.data["user_id"]
-        progress = self.repository.get_progress(user_id)
-        if not progress or progress["completed"]:
-            job.schedule_removal()
-            return
-        level = int(progress["level"])
-        if not 1 <= level <= self.game_service.total_levels:
-            job.schedule_removal()
-            return
-        riddle = self.game_service.get_level(level)
-        remaining = self.repository.get_remaining_seconds(user_id, riddle.time_limit_seconds)
-        if remaining <= 0:
-            self.repository.record_timeout(user_id)
-            try:
-                await context.bot.send_message(
-                    chat_id=job.data["chat_id"],
-                    text="⌛ Время вышло! Уровень не потерян — новый отсчёт начался.",
-                )
-                intro = self.game_service.get_stage_intro(level, user_id)
-                message = await context.bot.send_message(
-                    chat_id=job.data["chat_id"], text=intro,
-                    reply_markup=self.game_service.build_inline_keyboard(level), parse_mode="Markdown",
-                )
-                self._schedule_timer(context, user_id, message.chat_id, message.message_id)
-            finally:
-                job.schedule_removal()
-            return
+    async def _timer_loop(self, bot: Bot, user_id: int, chat_id: int, message_id: int) -> None:
         try:
-            await context.bot.edit_message_text(
-                chat_id=job.data["chat_id"],
-                message_id=job.data["message_id"],
-                text=self.game_service.get_stage_intro(level, user_id),
-                reply_markup=self.game_service.build_inline_keyboard(level),
-                parse_mode="Markdown",
-            )
-        except BadRequest as exc:
-            if "message is not modified" not in str(exc).lower():
-                job.schedule_removal()
+            while True:
+                progress = self.repository.get_progress(user_id)
+                if not progress or progress["completed"]:
+                    return
+                level = int(progress["level"])
+                if not 1 <= level <= self.game_service.total_levels:
+                    return
+                riddle = self.game_service.get_level(level)
+                remaining = self.repository.get_remaining_seconds(user_id, riddle.time_limit_seconds)
+                if remaining <= 0:
+                    self.repository.record_timeout(user_id)
+                    text = "⌛ Время вышло! Уровень не потерян — отсчёт начался заново.\n\n"
+                    text += self.game_service.get_stage_intro(level, user_id)
+                else:
+                    text = self.game_service.get_stage_intro(level, user_id)
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=text,
+                        reply_markup=self.game_service.build_inline_keyboard(level),
+                    )
+                except TelegramBadRequest as exc:
+                    if "message is not modified" not in str(exc).lower():
+                        logger.info("Timer stopped for player %s: %s", user_id, exc)
+                        return
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            current = self._timer_tasks.get(user_id)
+            if current is asyncio.current_task():
+                self._timer_tasks.pop(user_id, None)
+
+    async def shutdown(self) -> None:
+        tasks = list(self._timer_tasks.values())
+        self._timer_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def build_application(token: str, db_path: str, levels: list[Riddle]):
-    repository = UserProgressRepository(db_path)
-    bot = JourneyBot(repository, levels)
-    app = ApplicationBuilder().token(token).build()
-    app.add_handler(CommandHandler("start", bot.start))
-    app.add_handler(CommandHandler("stats", bot.stats))
-    app.add_handler(CommandHandler("leaderboard", bot.leaderboard))
-    app.add_handler(CallbackQueryHandler(bot.handle_callback))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), bot.handle_text))
-    return app
+def build_router(repository: UserProgressRepository, levels: list[Riddle]) -> JourneyBot:
+    return JourneyBot(repository, levels)

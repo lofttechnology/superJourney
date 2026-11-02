@@ -1,19 +1,36 @@
+import asyncio
 import logging
+
+from aiogram import Bot, Dispatcher
 
 from app.config import get_settings
 from app.domain.journey import load_riddles
-from app.handlers.telegram_handlers import build_application
+from app.handlers.telegram_handlers import build_router
+from app.infrastructure.database import UserProgressRepository
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-def main() -> None:
+async def main() -> None:
     settings = get_settings()
     levels = load_riddles(settings.levels_path)
-    app = build_application(settings.telegram_token, settings.db_path, levels)
-    logging.info("Starting superJourney bot with %s configured levels...", len(levels))
-    app.run_polling()
+    repository = UserProgressRepository(settings.db_path)
+    journey = build_router(repository, levels)
+    bot = Bot(token=settings.telegram_token)
+    dispatcher = Dispatcher()
+    dispatcher.include_router(journey.router)
+    dispatcher.shutdown.register(journey.shutdown)
+
+    logging.info("Starting superJourney with Aiogram and %s configured levels...", len(levels))
+    try:
+        await dispatcher.start_polling(bot)
+    finally:
+        await bot.session.close()
+
+
+def run() -> None:
+    asyncio.run(main())
 
 
 if __name__ == "__main__":
-    main()
+    run()
