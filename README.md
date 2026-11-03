@@ -16,7 +16,7 @@ Telegram adventure bot built with **Aiogram 3**, inline keyboards, persistent SQ
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env .env
+cp .env.example .env
 # set TELEGRAM_TOKEN in .env
 python -m app.main
 ```
