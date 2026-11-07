@@ -188,6 +188,14 @@ class JourneyBot:
                 return
             result = self.game_service.resolve_answer(level, option)
             self.repository.record_attempt(user.id, result["is_correct"])
+            if not result["is_correct"]:
+                # Callback alerts are user-facing; log incorrect button selections for operators too.
+                logger.info(
+                    "Incorrect button answer from player %s (@%s) on level %s",
+                    user.id,
+                    user.username or "unknown",
+                    level,
+                )
             await self._apply_callback_result(query, bot, user.id, level, result)
 
     async def _apply_result(self, message: Message, bot: Bot, user_id: int, level: int, result: dict) -> None:
