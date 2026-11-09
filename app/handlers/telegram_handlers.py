@@ -114,7 +114,6 @@ class JourneyBot:
         await self._apply_result(message, bot, user.id, level, result)
 
     async def handle_callback(self, query: CallbackQuery, bot: Bot) -> None:
-        await query.answer()
         user = query.from_user
         data = query.data or ""
 
@@ -127,6 +126,7 @@ class JourneyBot:
                     self.game_service.get_start_message(),
                     reply_markup=self.game_service.build_inline_keyboard(1, "welcome"),
                 )
+            await query.answer()
             return
 
         progress = self._progress(user)
@@ -134,6 +134,7 @@ class JourneyBot:
         if data == "begin":
             if query.message:
                 await self._send_level(query.message, bot, level)
+            await query.answer()
             return
         if data == "stats":
             row = self.repository.get_player_stats(user.id)
@@ -141,10 +142,12 @@ class JourneyBot:
                 f"📊 Завершено: {row['games_completed']} · Лучшее время: "
                 f"{self.game_service.format_duration(row['best_time_seconds'])} · Попыток: {row['total_attempts']}"
             )
+            await query.answer()
             return
         if data == "leaderboard":
             if query.message:
                 await self.leaderboard(query.message)
+            await query.answer()
             return
         if data == "map":
             if query.message:
@@ -152,6 +155,7 @@ class JourneyBot:
                     self.game_service.map_text(level, bool(progress["completed"])),
                     reply_markup=self.game_service.build_inline_keyboard(level, "map"),
                 )
+            await query.answer()
             return
         if data == "back":
             if query.message and not progress["completed"]:
@@ -162,6 +166,7 @@ class JourneyBot:
                 self._start_timer(bot, user.id, query.message.chat.id, query.message.message_id)
             elif query.message:
                 await query.message.edit_text(self.game_service.final_card(0))
+            await query.answer()
             return
         if data == "retry":
             if query.message and not progress["completed"]:
@@ -170,6 +175,7 @@ class JourneyBot:
                     reply_markup=self.game_service.build_inline_keyboard(level),
                 )
                 self._start_timer(bot, user.id, query.message.chat.id, query.message.message_id)
+            await query.answer()
             return
         if data.startswith("answer:"):
             try:
@@ -189,7 +195,6 @@ class JourneyBot:
             result = self.game_service.resolve_answer(level, option)
             self.repository.record_attempt(user.id, result["is_correct"])
             if not result["is_correct"]:
-                # Callback alerts are user-facing; log incorrect button selections for operators too.
                 logger.info(
                     "Incorrect button answer from player %s (@%s) on level %s",
                     user.id,
@@ -244,6 +249,7 @@ class JourneyBot:
     async def _handle_timeout_callback(self, query: CallbackQuery, bot: Bot, user_id: int, level: int) -> None:
         self._cancel_timer(user_id)
         self.repository.record_timeout(user_id)
+        await query.answer("⌛ Время вышло! Уровень не потерян — отсчёт начался заново.", show_alert=True)
         if query.message:
             await query.message.edit_text(
                 "⌛ Время вышло! Уровень не потерян — отсчёт начался заново.\n\n"
