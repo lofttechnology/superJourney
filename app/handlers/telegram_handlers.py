@@ -133,6 +133,8 @@ class JourneyBot:
         level = int(progress["level"])
         if data == "begin":
             if query.message:
+                # Begin the countdown when the first riddle is opened, not at /start.
+                self.repository.move_to_level(user.id, level)
                 await self._send_level(query.message, bot, level)
             await query.answer()
             return
