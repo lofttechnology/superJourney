@@ -49,8 +49,12 @@ class JourneyBot:
             name=f"journey-timer:{user_id}",
         )
 
-    async def _send_level(self, message: Message, bot: Bot, level: int) -> None:
-        user_id = message.from_user.id
+    async def _send_level(
+        self, message: Message, bot: Bot, level: int, user_id: int | None = None
+    ) -> None:
+        # Callback messages are authored by the bot; use the callback user's ID
+        # when this method is called from an inline-button handler.
+        user_id = user_id if user_id is not None else message.from_user.id
         card = await message.answer(
             self.game_service.get_stage_intro(level, user_id),
             reply_markup=self.game_service.build_inline_keyboard(level),
@@ -136,7 +140,7 @@ class JourneyBot:
                 # Start the level countdown when the player opens the first riddle,
                 # not when /start displays the welcome screen.
                 self.repository.move_to_level(user.id, level)
-                await self._send_level(query.message, bot, level)
+                await self._send_level(query.message, bot, level, user.id)
             return
         if data == "stats":
             row = self.repository.get_player_stats(user.id)
@@ -216,7 +220,7 @@ class JourneyBot:
         next_level = result["next_level"]
         self.repository.move_to_level(user_id, next_level)
         await message.answer(result["message"])
-        await self._send_level(message, bot, next_level)
+        await self._send_level(message, bot, next_level, user_id)
 
     async def _apply_callback_result(self, query: CallbackQuery, bot: Bot, user_id: int, level: int, result: dict) -> None:
         message = query.message
@@ -237,12 +241,12 @@ class JourneyBot:
         next_level = result["next_level"]
         self.repository.move_to_level(user_id, next_level)
         await message.edit_text(result["message"])
-        await self._send_level(message, bot, next_level)
+        await self._send_level(message, bot, next_level, user_id)
 
     async def _handle_timeout(self, message: Message, bot: Bot, user_id: int, level: int) -> None:
         self.repository.record_timeout(user_id)
         await message.answer("⌛ Время вышло! Уровень не потерян — отсчёт начался заново.")
-        await self._send_level(message, bot, level)
+        await self._send_level(message, bot, level, user_id)
 
     async def _handle_timeout_callback(self, query: CallbackQuery, bot: Bot, user_id: int, level: int) -> None:
         self._cancel_timer(user_id)
