@@ -133,6 +133,9 @@ class JourneyBot:
         level = int(progress["level"])
         if data == "begin":
             if query.message:
+                # Start the level countdown when the player opens the first riddle,
+                # not when /start displays the welcome screen.
+                self.repository.move_to_level(user.id, level)
                 await self._send_level(query.message, bot, level)
             return
         if data == "stats":
