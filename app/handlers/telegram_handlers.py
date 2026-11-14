@@ -229,26 +229,30 @@ class JourneyBot:
         await self._send_level(message, bot, next_level, user_id)
 
     async def _apply_callback_result(self, query: CallbackQuery, bot: Bot, user_id: int, level: int, result: dict) -> None:
+        message = query.message
         if not result["is_correct"]:
             await query.answer(result["message"], show_alert=True)
             return
         await query.answer()
-        message = query.message
         if not message:
             return
+
         self._cancel_timer(user_id)
         if result["finished"]:
             elapsed = self.repository.mark_completed(user_id)
-            await message.edit_text(result["message"])
-            await message.answer(
+            await message.edit_text(
                 self.game_service.final_card(elapsed),
                 reply_markup=self.game_service.build_inline_keyboard(level, "finished"),
             )
             return
+
         next_level = result["next_level"]
         self.repository.move_to_level(user_id, next_level)
-        await message.edit_text(result["message"])
-        await self._send_level(message, bot, next_level, user_id)
+        await message.edit_text(
+            self.game_service.get_stage_intro(next_level, user_id),
+            reply_markup=self.game_service.build_inline_keyboard(next_level),
+        )
+        self._start_timer(bot, user_id, message.chat.id, message.message_id)
 
     async def _handle_timeout(self, message: Message, bot: Bot, user_id: int, level: int) -> None:
         self.repository.record_timeout(user_id)
