@@ -21,26 +21,26 @@ class GameService:
         return (
             "🌍 Добро пожаловать в superJourney!\n\n"
             "Тебя ждут загадки, уровни и путешествие по неизведанным местам.\n"
-            "На каждом уровне есть ограничение по времени.\n\n"
+            "Ограничения по времени нет — общий таймер начнётся, когда ты отправишься в путь.\n\n"
             "Нажми кнопку, чтобы открыть карту и отправиться в путь!"
         )
 
     def get_stage_intro(self, level: int, user_id: int) -> str:
         riddle = self.get_level(level)
-        remaining = self.repository.get_remaining_seconds(user_id, riddle.time_limit_seconds)
+        total_elapsed = self.repository.get_elapsed_seconds(user_id)
+        level_elapsed = self.repository.get_level_elapsed_seconds(user_id)
         return (
             f"🎮 Уровень {level}/{self.total_levels}\n"
             f"📍 {riddle.title} — {riddle.map_label}\n"
-            f"⏱ Осталось: {remaining} сек.\n\n"
+            f"⏱ Общее время: {self.format_duration(total_elapsed)}\n"
+            f"🧩 На эту загадку: {self.format_duration(level_elapsed)}\n\n"
             f"{riddle.question}\n\n"
             "Выбери вариант кнопкой ниже или отправь ответ сообщением."
         )
 
     def build_inline_keyboard(self, level: int, page: str = "stage") -> InlineKeyboardMarkup:
         if page == "welcome":
-            return InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🚀 Начать путешествие", callback_data="begin")
-            ]])
+            return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Начать путешествие", callback_data="begin")]])
         if page == "finished":
             return InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🗺️ Финальная карта", callback_data="map")],
@@ -52,21 +52,11 @@ class GameService:
                 [InlineKeyboardButton(text="⬅️ К загадке", callback_data="back")],
                 [InlineKeyboardButton(text="🔁 Начать заново", callback_data="restart")],
             ])
-
         riddle = self.get_level(level)
-        rows = [
-            [InlineKeyboardButton(text=option, callback_data=f"answer:{level}:{index}")]
-            for index, option in enumerate(riddle.options)
-        ]
+        rows = [[InlineKeyboardButton(text=option, callback_data=f"answer:{level}:{index}")] for index, option in enumerate(riddle.options)]
         rows.extend([
-            [
-                InlineKeyboardButton(text="🔄 Обновить карточку", callback_data="retry"),
-                InlineKeyboardButton(text="🗺️ Карта", callback_data="map"),
-            ],
-            [
-                InlineKeyboardButton(text="📊 Статистика", callback_data="stats"),
-                InlineKeyboardButton(text="🏳️ Начать заново", callback_data="restart"),
-            ],
+            [InlineKeyboardButton(text="🔄 Обновить карточку", callback_data="retry"), InlineKeyboardButton(text="🗺️ Карта", callback_data="map")],
+            [InlineKeyboardButton(text="📊 Статистика", callback_data="stats"), InlineKeyboardButton(text="🏳️ Начать заново", callback_data="restart")],
         ])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -83,27 +73,16 @@ class GameService:
         riddle = self.get_level(level)
         if str(raw_answer).strip().casefold() == riddle.answer.strip().casefold():
             next_level = level + 1
-            return {
-                "is_correct": True,
-                "message": riddle.success_message,
-                "next_level": next_level,
-                "finished": next_level > self.total_levels,
-            }
-        return {
-            "is_correct": False,
-            "message": "❌ Не совсем! Попробуй ещё раз — время ещё идёт.",
-            "next_level": level,
-            "finished": False,
-        }
+            return {"is_correct": True, "message": riddle.success_message, "next_level": next_level, "finished": next_level > self.total_levels}
+        return {"is_correct": False, "message": "❌ Не совсем! Попробуй ещё раз — таймер продолжает идти.", "next_level": level, "finished": False}
 
     def final_card(self, elapsed_seconds: int) -> str:
-        minutes, seconds = divmod(elapsed_seconds, 60)
         route = " → ".join(level.map_label for level in self.levels)
         return (
             "🏆 ФИНАЛЬНАЯ КАРТА ПУТЕШЕСТВИЯ\n\n"
             "🎉 Все уровни пройдены! Ты настоящий мастер загадок.\n\n"
             f"🗺️ Маршрут:\n{route}\n\n"
-            f"⏱ Время прохождения: {minutes:02d}:{seconds:02d}\n"
+            f"⏱ Общее время прохождения: {self.format_duration(elapsed_seconds)}\n"
             f"⭐ Уровней пройдено: {self.total_levels}/{self.total_levels}\n\n"
             "Сохрани этот маршрут в памяти и отправляйся в новое приключение!"
         )
@@ -113,4 +92,7 @@ class GameService:
         if seconds is None:
             return "—"
         minutes, remainder = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}ч {minutes}м {remainder}с"
         return f"{minutes}м {remainder}с"
