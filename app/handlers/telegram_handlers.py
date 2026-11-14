@@ -118,9 +118,14 @@ class JourneyBot:
         await self._apply_result(message, bot, user.id, level, result)
 
     async def handle_callback(self, query: CallbackQuery, bot: Bot) -> None:
-        await query.answer()
         user = query.from_user
         data = query.data or ""
+
+        # Answer callbacks must remain unanswered until the result is known:
+        # Telegram only allows one answer per callback, and incorrect answers
+        # need to use that response to display an alert to the player.
+        if not data.startswith("answer:"):
+            await query.answer()
 
         if data == "restart":
             username, display = self._identity(user)
@@ -191,6 +196,7 @@ class JourneyBot:
                 return
             riddle = self.game_service.get_level(level)
             if self.repository.get_remaining_seconds(user.id, riddle.time_limit_seconds) <= 0:
+                await query.answer()
                 await self._handle_timeout_callback(query, bot, user.id, level)
                 return
             result = self.game_service.resolve_answer(level, option)
@@ -223,11 +229,12 @@ class JourneyBot:
         await self._send_level(message, bot, next_level, user_id)
 
     async def _apply_callback_result(self, query: CallbackQuery, bot: Bot, user_id: int, level: int, result: dict) -> None:
-        message = query.message
-        if not message:
-            return
         if not result["is_correct"]:
             await query.answer(result["message"], show_alert=True)
+            return
+        await query.answer()
+        message = query.message
+        if not message:
             return
         self._cancel_timer(user_id)
         if result["finished"]:
