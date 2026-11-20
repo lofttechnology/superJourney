@@ -160,6 +160,9 @@ class JourneyBot:
             return
         if data == "map":
             if query.message:
+                # The timer refreshes the riddle card in place. Pause it while
+                # the map is displayed so it cannot overwrite the map a moment later.
+                self._cancel_timer(user.id)
                 await query.message.edit_text(
                     self.game_service.map_text(level, bool(progress["completed"])),
                     reply_markup=self.game_service.build_inline_keyboard(level, "map"),
