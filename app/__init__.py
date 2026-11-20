@@ -1,1 +1,1 @@
-"""superJourney package."""
+"""Пакет приложения superJourney."""

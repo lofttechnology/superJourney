@@ -17,7 +17,7 @@ class Riddle:
 
 
 def load_riddles(path: str | Path) -> list[Riddle]:
-    """Load and validate level definitions from YAML."""
+    """Загружает и проверяет определения уровней из YAML."""
     config_path = Path(path)
     try:
         raw: Any = yaml.safe_load(config_path.read_text(encoding="utf-8"))

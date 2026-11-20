@@ -8,7 +8,7 @@ def utc_now() -> datetime:
 
 
 class UserProgressRepository:
-    """SQLite persistence for current runs and lifetime player statistics."""
+    """Хранит прогресс текущих забегов и общую статистику игроков в SQLite."""
 
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
@@ -114,7 +114,7 @@ class UserProgressRepository:
         return self._elapsed_since(progress.get("level_started_at") or progress.get("started_at"))
 
     def get_remaining_seconds(self, user_id: int, time_limit_seconds: int) -> int:
-        """Compatibility shim: levels no longer expire; retain a positive value for older callers."""
+        """Совместимый адаптер: уровни больше не истекают; сохраняет положительное значение для старых вызовов."""
         return max(1, time_limit_seconds)
 
     def record_attempt(self, user_id: int, correct: bool) -> None:
@@ -126,7 +126,7 @@ class UserProgressRepository:
     def move_to_level(self, user_id: int, level: int) -> None:
         now = utc_now().isoformat()
         with self._connect() as conn:
-            # The first level timer starts when the player presses “Begin”, not at /start.
+            # Таймер первого уровня запускается по нажатию «Начать», а не при вызове /start.
             if level == 1:
                 conn.execute(
                     "UPDATE user_progress SET started_at=?, state=?, level=?, level_started_at=?, updated_at=? WHERE user_id=?",
@@ -139,7 +139,7 @@ class UserProgressRepository:
                 )
 
     def record_timeout(self, user_id: int) -> None:
-        # Kept for compatibility with existing databases/callers; countdowns are disabled.
+        # Сохранено для совместимости с существующими базами данных и вызовами; обратный отсчёт отключён.
         now = utc_now().isoformat()
         with self._connect() as conn:
             conn.execute("UPDATE user_progress SET timeouts=timeouts+1, updated_at=? WHERE user_id=?", (now, user_id))
@@ -169,7 +169,7 @@ class UserProgressRepository:
             rows = conn.execute(
                 """SELECT display_name, username, games_completed, best_time_seconds
                    FROM player_stats WHERE games_completed > 0
-                   ORDER BY best_time_seconds ASC, games_completed DESC LIMIT ?""", (limit,)
+                   ORDER BY best_time_seconds ASC, games_completed DESC LIMIT ?""", (limit,),
             ).fetchall()
             return [dict(row) for row in rows]
 

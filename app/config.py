@@ -5,7 +5,7 @@ from os import getenv
 from dotenv import load_dotenv
 
 
-# Resolve configuration from the repository root, not the IDE's working directory.
+# Конфигурация определяется относительно корня репозитория, а не рабочей папки IDE.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 

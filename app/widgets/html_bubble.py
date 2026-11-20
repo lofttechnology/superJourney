@@ -1,4 +1,4 @@
-"""A compact, self-contained interactive HTML Bubble demo."""
+"""Компактная самостоятельная интерактивная демонстрация HTML Bubble."""
 
 HTML_BUBBLE = r'''<!doctype html>
 <html lang="ru">
@@ -55,7 +55,7 @@ HTML_BUBBLE = r'''<!doctype html>
       });
       document.getElementById('celebrate').addEventListener('click', (event) => {
         const done = checks.filter((check) => check.checked).length;
-        status.textContent = done === checks.length ? 'Все пункты выполнены! Отличная работа 🎉' : `Готово ${done} из ${checks.length} — можно продолжить`;
+        status.textContent = done === checks.length ? 'Все пункты выполнены! Отличная работа 🎉' : `Готово ${done} из ${checks.length} — можно продолжать →`;
         event.currentTarget.textContent = done === checks.length ? 'Ура! 🎉' : 'Продолжаю →';
       });
     })();

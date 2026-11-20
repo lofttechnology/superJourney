@@ -1,1 +1,1 @@
-"""Self-contained HTML documents for Telegram HTML Widget demonstrations."""
+"""Самодостаточные HTML-документы для демонстрации Telegram HTML Widget."""
